@@ -88,7 +88,7 @@ echo.
 :MENU
 cls
 echo ===============================
-echo SnailyCAD Admin Menu
+echo SnailyCAD Admin Menu in bata
 echo ===============================
 echo 1. List all users
 echo 2. Unlink Discord ID
