@@ -160,14 +160,15 @@ pause() {
 show_menu() {
     clear
     echo "==============================="
-    echo "    SnailyCAD Admin Menu in bata"
+    echo "    SnailyCAD Admin Menu"
     echo "==============================="
     echo "1. List all users"
     echo "2. Unlink Discord ID"
     echo "3. Update CAD whitelist (disable all)"
-    echo "4. (i.e., re-enable login via username and password, and disable Discord forced authentication)."
+    echo "4. Update CadFeature settings"
     echo "5. Reset a user's password"
-    echo "6. Run maintenance commands"
+    echo "6. List departments"
+    echo "7. Run maintenance commands"
     echo "0. Exit"
     echo "==============================="
 }
@@ -350,6 +351,24 @@ reset_user_password() {
     pause
 }
 
+# Function to list departments
+list_departments() {
+    clear
+    print_info "Fetching department information..."
+    echo
+    
+    local dept_sql="
+    SELECT d.id AS department_uuid,
+           d.callsign,
+           v.value AS department_name
+    FROM public.\"DepartmentValue\" d
+    JOIN public.\"Value\" v
+      ON d.\"valueId\" = v.id;
+    "
+    
+    execute_sql "$dept_sql" && pause
+}
+
 # Function to show maintenance menu
 show_maintenance_menu() {
     clear
@@ -423,7 +442,7 @@ main() {
     # Main menu loop
     while true; do
         show_menu
-        read -p "Enter your choice (0-6): " choice
+        read -p "Enter your choice (0-7): " choice
         
         case $choice in
             1) list_users ;;
@@ -431,14 +450,15 @@ main() {
             3) update_cad_whitelist ;;
             4) update_feature_settings ;;
             5) reset_user_password ;;
-            6) maintenance_operations ;;
+            6) list_departments ;;
+            7) maintenance_operations ;;
             0) 
                 print_info "Cleaning up..."
                 print_success "Thank you for using SnailyCAD Admin Tool!"
                 exit 0
                 ;;
             *) 
-                print_error "Invalid choice. Please enter a number between 0-6."
+                print_error "Invalid choice. Please enter a number between 0-7."
                 pause
                 ;;
         esac
