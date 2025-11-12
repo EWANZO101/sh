@@ -169,6 +169,7 @@ show_menu() {
     echo "5. Reset a user's password"
     echo "6. List departments"
     echo "7. Run maintenance commands"
+    echo "8. Show database tables"
     echo "0. Exit"
     echo "==============================="
 }
@@ -183,6 +184,13 @@ list_users() {
     execute_sql "$sql" && pause
 }
 
+# Function to escape SQL string literals
+escape_sql_string() {
+    local str="$1"
+    # Replace single quotes with two single quotes for SQL escaping
+    echo "${str//\'/\'\'}"
+}
+
 # Function to unlink Discord ID
 unlink_discord() {
     clear
@@ -192,8 +200,12 @@ unlink_discord() {
         print_error "Discord ID cannot be empty."
     done
     
+    # Escape the Discord ID for SQL
+    local escaped_discord_id
+    escaped_discord_id=$(escape_sql_string "$DISCORD_ID")
+    
     print_info "Searching for users with Discord ID: $DISCORD_ID"
-    local search_sql="SELECT id, username, \"discordId\" FROM public.\"User\" WHERE \"discordId\" = '$DISCORD_ID';"
+    local search_sql="SELECT id, username, \"discordId\" FROM public.\"User\" WHERE \"discordId\" = '$escaped_discord_id';"
     
     if ! execute_sql "$search_sql"; then
         pause
@@ -208,7 +220,7 @@ unlink_discord() {
         return 0
     fi
     
-    local unlink_sql="UPDATE public.\"User\" SET \"discordId\" = NULL WHERE \"discordId\" = '$DISCORD_ID';"
+    local unlink_sql="UPDATE public.\"User\" SET \"discordId\" = NULL WHERE \"discordId\" = '$escaped_discord_id';"
     if execute_sql "$unlink_sql" "Unlinking Discord ID..."; then
         print_success "Discord ID unlinked successfully."
         echo
@@ -335,6 +347,10 @@ reset_user_password() {
         print_error "Password cannot be empty."
     done
     
+    # Escape the password for SQL
+    local escaped_password
+    escaped_password=$(escape_sql_string "$NEW_PASS")
+    
     echo
     read -p "Confirm password reset for user #$USER_NUM? (y/N): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
@@ -343,12 +359,181 @@ reset_user_password() {
         return 0
     fi
     
-    local reset_sql="UPDATE public.\"User\" SET password = crypt('$NEW_PASS', gen_salt('bf')) WHERE username = (SELECT username FROM (SELECT row_number() OVER () AS num, username FROM public.\"User\" WHERE username IS NOT NULL ORDER BY username) t WHERE num = $USER_NUM);"
+    local reset_sql="UPDATE public.\"User\" SET password = crypt('$escaped_password', gen_salt('bf')) WHERE username = (SELECT username FROM (SELECT row_number() OVER () AS num, username FROM public.\"User\" WHERE username IS NOT NULL ORDER BY username) t WHERE num = $USER_NUM);"
     
     if execute_sql "$reset_sql" "Resetting password..."; then
         print_success "Password reset successfully."
     fi
     pause
+}
+
+# Function to get table list as array
+get_table_list() {
+    local tables_query="SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;"
+    "$PSQL_PATH" -U "$DB_USER" -d "$DB_NAME" -h "$DB_HOST" -p "$DB_PORT" -t -A -c "$tables_query" 2>/dev/null
+}
+
+# Function to show table structure
+show_table_structure() {
+    local table_name="$1"
+    clear
+    print_info "Structure of table: $table_name"
+    echo
+    
+    local structure_sql="
+    SELECT 
+        column_name,
+        data_type,
+        character_maximum_length,
+        is_nullable,
+        column_default
+    FROM information_schema.columns 
+    WHERE table_schema = 'public' 
+    AND table_name = '$table_name'
+    ORDER BY ordinal_position;
+    "
+    
+    execute_sql "$structure_sql"
+}
+
+# Function to show table data
+show_table_data() {
+    local table_name="$1"
+    clear
+    print_info "Data from table: $table_name (first 20 rows)"
+    echo
+    
+    local data_sql="SELECT * FROM public.\"$table_name\" LIMIT 20;"
+    execute_sql "$data_sql"
+}
+
+# Function to count table rows
+count_table_rows() {
+    local table_name="$1"
+    local count_sql="SELECT COUNT(*) as total_rows FROM public.\"$table_name\";"
+    
+    print_info "Total rows in $table_name:"
+    execute_sql "$count_sql"
+}
+
+# Function for table operations menu
+table_operations_menu() {
+    local table_name="$1"
+    
+    while true; do
+        clear
+        echo "==============================="
+        echo "  Table: $table_name"
+        echo "==============================="
+        echo "1. View table structure"
+        echo "2. View table data (first 20 rows)"
+        echo "3. Count total rows"
+        echo "4. View all data (no limit)"
+        echo "5. Search table"
+        echo "0. Back to table list"
+        echo "==============================="
+        
+        read -p "Enter choice (0-5): " table_choice
+        
+        case $table_choice in
+            0) return 0 ;;
+            1)
+                show_table_structure "$table_name"
+                pause
+                ;;
+            2)
+                show_table_data "$table_name"
+                pause
+                ;;
+            3)
+                count_table_rows "$table_name"
+                pause
+                ;;
+            4)
+                clear
+                print_warning "This will show ALL rows. Large tables may take time."
+                read -p "Continue? (y/N): " confirm
+                if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+                    print_info "Fetching all data from $table_name..."
+                    echo
+                    local all_data_sql="SELECT * FROM public.\"$table_name\";"
+                    execute_sql "$all_data_sql"
+                fi
+                pause
+                ;;
+            5)
+                clear
+                echo "Search in table: $table_name"
+                echo
+                read -p "Enter column name to search: " search_column
+                read -p "Enter search value: " search_value
+                
+                local escaped_value
+                escaped_value=$(escape_sql_string "$search_value")
+                
+                print_info "Searching for '$search_value' in column '$search_column'..."
+                echo
+                local search_sql="SELECT * FROM public.\"$table_name\" WHERE \"$search_column\" ILIKE '%$escaped_value%' LIMIT 50;"
+                execute_sql "$search_sql"
+                pause
+                ;;
+            *)
+                print_error "Invalid choice."
+                pause
+                ;;
+        esac
+    done
+}
+
+# Function to show all database tables (explorer)
+show_database_tables() {
+    while true; do
+        clear
+        print_info "Fetching database tables..."
+        echo
+        
+        # Get table list
+        local tables
+        mapfile -t tables < <(get_table_list)
+        
+        if [[ ${#tables[@]} -eq 0 ]]; then
+            print_error "No tables found or connection error."
+            pause
+            return 1
+        fi
+        
+        echo "==============================="
+        echo "     Database Table Explorer"
+        echo "==============================="
+        
+        # Display numbered list of tables
+        local i=1
+        for table in "${tables[@]}"; do
+            # Get row count for each table
+            local count_sql="SELECT COUNT(*) FROM public.\"$table\";"
+            local row_count
+            row_count=$("$PSQL_PATH" -U "$DB_USER" -d "$DB_NAME" -h "$DB_HOST" -p "$DB_PORT" -t -A -c "$count_sql" 2>/dev/null || echo "?")
+            
+            printf "%2d. %-30s (%s rows)\n" "$i" "$table" "$row_count"
+            ((i++))
+        done
+        
+        echo "==============================="
+        echo "0. Back to main menu"
+        echo "==============================="
+        echo
+        read -p "Select table number (0-${#tables[@]}): " table_num
+        
+        if [[ "$table_num" == "0" ]]; then
+            return 0
+        elif [[ "$table_num" =~ ^[0-9]+$ ]] && [[ "$table_num" -ge 1 ]] && [[ "$table_num" -le ${#tables[@]} ]]; then
+            local selected_table="${tables[$((table_num-1))]}"
+            table_operations_menu "$selected_table"
+        else
+            print_error "Invalid selection."
+            pause
+        fi
+    done
 }
 
 # Function to list departments
@@ -357,16 +542,52 @@ list_departments() {
     print_info "Fetching department information..."
     echo
     
-    local dept_sql="
-    SELECT d.id AS department_uuid,
-           d.callsign,
-           v.value AS department_name
-    FROM public.\"DepartmentValue\" d
-    JOIN public.\"Value\" v
-      ON d.\"valueId\" = v.id;
+    # First, check which department-related tables exist
+    print_info "Detecting department table..."
+    local check_sql="
+    SELECT table_name 
+    FROM information_schema.tables 
+    WHERE table_schema = 'public' 
+    AND table_name ILIKE '%department%'
+    ORDER BY table_name;
     "
     
-    execute_sql "$dept_sql" && pause
+    if ! execute_sql "$check_sql"; then
+        print_error "Could not detect department tables."
+        pause
+        return 1
+    fi
+    
+    echo
+    print_info "Attempting to query department data..."
+    
+    # Try multiple possible table structures
+    local dept_queries=(
+        # Try DepartmentValue with Value join
+        "SELECT d.id AS department_uuid, d.callsign, v.value AS department_name FROM public.\"DepartmentValue\" d JOIN public.\"Value\" v ON d.\"valueId\" = v.id"
+        # Try DepartmentValue alone
+        "SELECT id, callsign, \"valueId\" FROM public.\"DepartmentValue\" LIMIT 20"
+        # Try Department table
+        "SELECT * FROM public.\"Department\" LIMIT 20"
+        # Try any table with 'department' in the name
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename ILIKE '%department%'"
+    )
+    
+    local success=false
+    for query in "${dept_queries[@]}"; do
+        if execute_sql "$query" 2>/dev/null; then
+            success=true
+            break
+        fi
+    done
+    
+    if [[ "$success" == false ]]; then
+        print_error "No department or division tables found."
+        print_info "Your SnailyCAD instance may not have departments configured,"
+        print_info "or they may use a different table structure."
+    fi
+    
+    pause
 }
 
 # Function to show maintenance menu
@@ -442,7 +663,7 @@ main() {
     # Main menu loop
     while true; do
         show_menu
-        read -p "Enter your choice (0-7): " choice
+        read -p "Enter your choice (0-8): " choice
         
         case $choice in
             1) list_users ;;
@@ -452,13 +673,14 @@ main() {
             5) reset_user_password ;;
             6) list_departments ;;
             7) maintenance_operations ;;
+            8) show_database_tables ;;
             0) 
                 print_info "Cleaning up..."
                 print_success "Thank you for using SnailyCAD Admin Tool!"
                 exit 0
                 ;;
             *) 
-                print_error "Invalid choice. Please enter a number between 0-7."
+                print_error "Invalid choice. Please enter a number between 0-8."
                 pause
                 ;;
         esac
